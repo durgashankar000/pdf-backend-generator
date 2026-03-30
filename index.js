@@ -2,12 +2,14 @@ const express = require('express');
 const PDFDocument = require('pdfkit');
 
 const app = express();
+
 app.use(express.json());
+app.use(express.text({ type: '*/*' }));
 
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'https://app.hubspot.com');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', '*');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -18,7 +20,12 @@ app.get('/', (req, res) => {
 
 app.post('/generate-pdf', async (req, res) => {
   try {
-    const { contact } = req.body;
+    let body = req.body;
+    if (typeof body === 'string') {
+      body = JSON.parse(body);
+    }
+
+    const contact = body.contact || {};
 
     const doc = new PDFDocument({ margin: 50 });
     const chunks = [];
@@ -40,14 +47,13 @@ app.post('/generate-pdf', async (req, res) => {
     doc.moveDown();
 
     const fields = [
-      { label: 'Name',       value: `${contact.firstname || ''} ${contact.lastname || ''}`.trim() },
-      { label: 'Email',      value: contact.email || 'N/A' },
-      { label: 'Phone',      value: contact.phone || 'N/A' },
-      { label: 'Company',    value: contact.company || 'N/A' },
-      { label: 'Job Title',  value: contact.jobtitle || 'N/A' },
-      { label: 'Lifecycle',  value: contact.lifecyclestage || 'N/A' },
-      { label: 'Owner',      value: contact.hubspot_owner_id || 'N/A' },
-      { label: 'Created',    value: contact.createdate ? new Date(contact.createdate).toLocaleDateString('en-IN') : 'N/A' },
+      { label: 'Name',      value: `${contact.firstname || ''} ${contact.lastname || ''}`.trim() || 'N/A' },
+      { label: 'Email',     value: contact.email || 'N/A' },
+      { label: 'Phone',     value: contact.phone || 'N/A' },
+      { label: 'Company',   value: contact.company || 'N/A' },
+      { label: 'Job Title', value: contact.jobtitle || 'N/A' },
+      { label: 'Lifecycle', value: contact.lifecyclestage || 'N/A' },
+      { label: 'Created',   value: contact.createdate ? new Date(contact.createdate).toLocaleDateString('en-IN') : 'N/A' },
     ];
 
     fields.forEach(({ label, value }) => {
