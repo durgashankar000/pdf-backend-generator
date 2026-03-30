@@ -12,6 +12,10 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get('/', (req, res) => {
+  res.json({ status: 'PDF Backend is running!' });
+});
+
 app.post('/generate-pdf', async (req, res) => {
   try {
     const { contact } = req.body;
