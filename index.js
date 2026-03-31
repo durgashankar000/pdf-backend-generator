@@ -55,6 +55,22 @@ function formatCreatedDate(raw) {
   return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('en-IN');
 }
 
+/** Base64url segment from CRM card (HubSpot iframe URLs often drop query strings). */
+function decodeContactPayload(segment) {
+  if (!segment || typeof segment !== 'string') return null;
+  try {
+    let b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const json = Buffer.from(b64, 'base64').toString('utf8');
+    const data = JSON.parse(json);
+    if (!data || typeof data !== 'object') return null;
+    if (!hasAnyContactData(data)) return null;
+    return contactFromQuery(data);
+  } catch {
+    return null;
+  }
+}
+
 /** Stream a contact PDF to the response (stateless — safe for Vercel serverless). */
 function sendContactPdf(res, contact, disposition) {
   const doc = new PDFDocument({ margin: 50 });
@@ -69,6 +85,9 @@ function sendContactPdf(res, contact, disposition) {
       `${disposition}; filename="contact.pdf"`
     );
     res.setHeader('Cache-Control', 'private, max-age=60');
+    // Embed in HubSpot iframe (cross-origin PDF viewer)
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Content-Security-Policy', 'frame-ancestors *');
     res.send(pdfBuffer);
   });
 
@@ -141,7 +160,21 @@ app.get('/pdf', (req, res) => {
   }
 });
 
-/** Inline PDF for iframe preview (alias). */
+/** Inline PDF for iframe — path segment (preferred for HubSpot iframes; query URLs are often stripped). */
+app.get('/view-pdf/:payload', (req, res) => {
+  try {
+    const contact = decodeContactPayload(req.params.payload);
+    if (!contact) {
+      return res.status(400).type('text/plain').send('Invalid or empty payload');
+    }
+    sendContactPdf(res, contact, 'inline');
+  } catch (err) {
+    console.error(err);
+    res.status(500).type('text/plain').send(err.message);
+  }
+});
+
+/** Inline PDF (query string — legacy). */
 app.get('/view-pdf', (req, res) => {
   try {
     if (!hasAnyContactData(req.query)) {
@@ -155,7 +188,21 @@ app.get('/view-pdf', (req, res) => {
   }
 });
 
-/** Attachment download (alias). */
+/** Download — path segment (preferred). */
+app.get('/download-pdf/:payload', (req, res) => {
+  try {
+    const contact = decodeContactPayload(req.params.payload);
+    if (!contact) {
+      return res.status(400).json({ error: 'Invalid or empty payload' });
+    }
+    sendContactPdf(res, contact, 'attachment');
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Download (query string — legacy). */
 app.get('/download-pdf', (req, res) => {
   try {
     if (!hasAnyContactData(req.query)) {
