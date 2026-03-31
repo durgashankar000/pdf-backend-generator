@@ -2,7 +2,6 @@ const express = require('express');
 const PDFDocument = require('pdfkit');
 
 const app = express();
-const pdfs = {};
 
 app.use(express.json());
 app.use(express.text({ type: '*/*' }));
@@ -15,77 +14,157 @@ app.use((req, res, next) => {
   next();
 });
 
+const CONTACT_QUERY_KEYS = [
+  'firstname',
+  'lastname',
+  'email',
+  'phone',
+  'company',
+  'jobtitle',
+  'lifecyclestage',
+  'createdate',
+];
+
+function contactFromQuery(q) {
+  return {
+    firstname: String(q.firstname ?? '').trim(),
+    lastname: String(q.lastname ?? '').trim(),
+    email: String(q.email ?? '').trim() || 'N/A',
+    phone: String(q.phone ?? '').trim() || 'N/A',
+    company: String(q.company ?? '').trim() || 'N/A',
+    jobtitle: String(q.jobtitle ?? '').trim() || 'N/A',
+    lifecyclestage: String(q.lifecyclestage ?? '').trim() || 'N/A',
+    createdate: String(q.createdate ?? '').trim(),
+  };
+}
+
+function hasAnyContactData(q) {
+  return CONTACT_QUERY_KEYS.some((k) => {
+    const v = q[k];
+    return v != null && String(v).trim() !== '';
+  });
+}
+
+function formatCreatedDate(raw) {
+  if (!raw) return 'N/A';
+  if (/^\d+$/.test(raw)) {
+    const d = new Date(Number(raw));
+    return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('en-IN');
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('en-IN');
+}
+
+/** Stream a contact PDF to the response (stateless — safe for Vercel serverless). */
+function sendContactPdf(res, contact, disposition) {
+  const doc = new PDFDocument({ margin: 50 });
+  const chunks = [];
+
+  doc.on('data', (chunk) => chunks.push(chunk));
+  doc.on('end', () => {
+    const pdfBuffer = Buffer.concat(chunks);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename="contact.pdf"`
+    );
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.send(pdfBuffer);
+  });
+
+  doc.fontSize(24).font('Helvetica-Bold').text('Contact Details', { align: 'center' });
+  doc.moveDown();
+  doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+  doc.moveDown();
+
+  const name =
+    `${contact.firstname} ${contact.lastname}`.trim() || 'N/A';
+  const fields = [
+    { label: 'Name', value: name },
+    { label: 'Email', value: contact.email },
+    { label: 'Phone', value: contact.phone },
+    { label: 'Company', value: contact.company },
+    { label: 'Job Title', value: contact.jobtitle },
+    { label: 'Lifecycle', value: contact.lifecyclestage },
+    { label: 'Created', value: formatCreatedDate(contact.createdate) },
+  ];
+
+  fields.forEach(({ label, value }) => {
+    doc.fontSize(12).font('Helvetica-Bold').text(`${label}:`, { continued: true });
+    doc.font('Helvetica').text(`  ${value}`);
+    doc.moveDown(0.5);
+  });
+
+  doc.moveDown();
+  doc.fontSize(9).fillColor('gray')
+    .text(`Generated on ${new Date().toLocaleString('en-IN')}`, { align: 'right' });
+
+  doc.end();
+}
+
 app.get('/', (req, res) => {
   res.json({ status: 'PDF Backend is running!' });
 });
 
-app.get('/generate-pdf', async (req, res) => {
+/** Validate params then return JSON (no PDF body) — used by the CRM card “Generate” step. */
+app.get('/generate-pdf', (req, res) => {
   try {
-    const contact = {
-      firstname:      req.query.firstname || '',
-      lastname:       req.query.lastname || '',
-      email:          req.query.email || 'N/A',
-      phone:          req.query.phone || 'N/A',
-      company:        req.query.company || 'N/A',
-      jobtitle:       req.query.jobtitle || 'N/A',
-      lifecyclestage: req.query.lifecyclestage || 'N/A',
-      createdate:     req.query.createdate || '',
-    };
-
-    const doc = new PDFDocument({ margin: 50 });
-    const chunks = [];
-
-    doc.on('data', (chunk) => chunks.push(chunk));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      const id = Date.now().toString();
-      pdfs[id] = pdfBuffer;
-
-      setTimeout(() => delete pdfs[id], 5 * 60 * 1000);
-
-      res.json({ success: true, pdfId: id });
-    });
-
-    doc.fontSize(24).font('Helvetica-Bold').text('Contact Details', { align: 'center' });
-    doc.moveDown();
-    doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-    doc.moveDown();
-
-    const fields = [
-      { label: 'Name',      value: `${contact.firstname} ${contact.lastname}`.trim() || 'N/A' },
-      { label: 'Email',     value: contact.email },
-      { label: 'Phone',     value: contact.phone },
-      { label: 'Company',   value: contact.company },
-      { label: 'Job Title', value: contact.jobtitle },
-      { label: 'Lifecycle', value: contact.lifecyclestage },
-      { label: 'Created',   value: contact.createdate ? new Date(contact.createdate).toLocaleDateString('en-IN') : 'N/A' },
-    ];
-
-    fields.forEach(({ label, value }) => {
-      doc.fontSize(12).font('Helvetica-Bold').text(`${label}:`, { continued: true });
-      doc.font('Helvetica').text(`  ${value}`);
-      doc.moveDown(0.5);
-    });
-
-    doc.moveDown();
-    doc.fontSize(9).fillColor('gray')
-      .text(`Generated on ${new Date().toLocaleString('en-IN')}`, { align: 'right' });
-
-    doc.end();
+    if (!hasAnyContactData(req.query)) {
+      return res.status(400).json({
+        success: false,
+        error: 'No contact fields in request',
+      });
+    }
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.get('/download-pdf/:id', (req, res) => {
+/**
+ * Stateless PDF: same query params as generate, plus disposition=inline|attachment.
+ * Works across Vercel instances (no in-memory store).
+ */
+app.get('/pdf', (req, res) => {
   try {
-    const pdf = pdfs[req.params.id];
-    if (!pdf) return res.status(404).json({ error: 'PDF expired or not found' });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=contact.pdf');
-    res.send(pdf);
+    if (!hasAnyContactData(req.query)) {
+      return res.status(400).json({ error: 'No contact data' });
+    }
+    const disposition =
+      req.query.disposition === 'attachment' ? 'attachment' : 'inline';
+    const contact = contactFromQuery(req.query);
+    sendContactPdf(res, contact, disposition);
   } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Inline PDF for iframe preview (alias). */
+app.get('/view-pdf', (req, res) => {
+  try {
+    if (!hasAnyContactData(req.query)) {
+      return res.status(400).send('No contact data');
+    }
+    const contact = contactFromQuery(req.query);
+    sendContactPdf(res, contact, 'inline');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(err.message);
+  }
+});
+
+/** Attachment download (alias). */
+app.get('/download-pdf', (req, res) => {
+  try {
+    if (!hasAnyContactData(req.query)) {
+      return res.status(400).json({ error: 'No contact data' });
+    }
+    const contact = contactFromQuery(req.query);
+    sendContactPdf(res, contact, 'attachment');
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
