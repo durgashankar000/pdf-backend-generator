@@ -122,7 +122,7 @@ function sendContactPdf(res, contact, disposition) {
 }
 
 app.get('/', (req, res) => {
-  res.json({ status: 'PDF Backend is running!' });
+  res.json({ status: 'PDF Backend is running! 2' });
 });
 
 /** Validate params then return JSON (no PDF body) — used by the CRM card “Generate” step. */
